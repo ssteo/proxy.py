@@ -15,7 +15,7 @@ from .methods import httpMethods
 from .chunk_parser import ChunkParser, chunkParserStates
 
 from ..common.constants import DEFAULT_DISABLE_HEADERS, COLON, CRLF, WHITESPACE, HTTP_1_1, DEFAULT_HTTP_PORT
-from ..common.utils import build_http_request, find_http_line, text_
+from ..common.utils import build_http_request, build_http_response, find_http_line, text_
 
 
 HttpParserStates = NamedTuple('HttpParserStates', [
@@ -105,19 +105,21 @@ class HttpParser:
             self.del_header(key.lower())
 
     def set_url(self, url: bytes) -> None:
+        # Work around with urlsplit semantics.
+        #
+        # For CONNECT requests, request line contains
+        # upstream_host:upstream_port which is not complaint
+        # with urlsplit, which expects a fully qualified url.
+        if self.method == httpMethods.CONNECT:
+            url = b'https://' + url
         self.url = urlparse.urlsplit(url)
         self.set_line_attributes()
 
     def set_line_attributes(self) -> None:
         if self.type == httpParserTypes.REQUEST_PARSER:
             if self.method == httpMethods.CONNECT and self.url:
-                if self.url.scheme == b'':
-                    u = urlparse.urlsplit(b'//' + self.url.path)
-                    self.host, self.port = u.hostname, u.port
-                else:
-                    self.host = self.url.scheme
-                    self.port = 443 if self.url.path == b'' else \
-                        int(self.url.path)
+                self.host = self.url.hostname
+                self.port = 443 if self.url.port is None else self.url.port
             elif self.url:
                 self.host, self.port = self.url.hostname, self.url.port \
                     if self.url.port else DEFAULT_HTTP_PORT
@@ -125,7 +127,7 @@ class HttpParser:
                 raise KeyError(
                     'Invalid request. Method: %r, Url: %r' %
                     (self.method, self.url))
-            self.path = self.build_url()
+            self.path = self.build_path()
 
     def is_chunked_encoded(self) -> bool:
         return b'transfer-encoding' in self.headers and \
@@ -169,7 +171,8 @@ class HttpParser:
                         self.state = httpParserStates.COMPLETE
                     more = False
                 else:
-                    raise NotImplementedError('Parser shouldn\'t have reached here')
+                    raise NotImplementedError(
+                        'Parser shouldn\'t have reached here')
             else:
                 more, raw = self.process(raw)
         self.buffer = raw
@@ -222,7 +225,7 @@ class HttpParser:
         value = COLON.join(parts[1:]).strip()
         self.add_headers([(key, value)])
 
-    def build_url(self) -> bytes:
+    def build_path(self) -> bytes:
         if not self.url:
             return b'/None'
         url = self.url.path
@@ -235,7 +238,8 @@ class HttpParser:
         return url
 
     def build(self, disable_headers: Optional[List[bytes]] = None) -> bytes:
-        assert self.method and self.version and self.path
+        """Rebuild the request object."""
+        assert self.method and self.version and self.path and self.type == httpParserTypes.REQUEST_PARSER
         if disable_headers is None:
             disable_headers = DEFAULT_DISABLE_HEADERS
         body: Optional[bytes] = ChunkParser.to_chunks(self.body) \
@@ -248,6 +252,17 @@ class HttpParser:
             body=body
         )
 
+    def build_response(self) -> bytes:
+        """Rebuild the response object."""
+        assert self.code and self.version and self.body and self.type == httpParserTypes.RESPONSE_PARSER
+        return build_http_response(
+            status_code=int(self.code),
+            protocol_version=self.version,
+            reason=self.reason,
+            headers={} if not self.headers else {
+                self.headers[k][0]: self.headers[k][1] for k in self.headers},
+            body=self.body if not self.is_chunked_encoded() else ChunkParser.to_chunks(self.body))
+
     def has_upstream_server(self) -> bool:
         """Host field SHOULD be None for incoming local WebServer requests."""
         return True if self.host is not None else False
@@ -256,3 +271,8 @@ class HttpParser:
         return self.version == HTTP_1_1 and \
             (not self.has_header(b'Connection') or
              self.header(b'Connection').lower() == b'keep-alive')
+
+    def is_connection_upgrade(self) -> bool:
+        return self.version == HTTP_1_1 and \
+            self.has_header(b'Connection') and \
+            self.has_header(b'Upgrade')

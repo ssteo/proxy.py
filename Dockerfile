@@ -7,7 +7,7 @@ COPY README.md /app/
 COPY proxy/ /app/proxy/
 WORKDIR /app
 RUN pip install --upgrade pip && \
-    pip install --install-option="--prefix=/deps" .
+    pip install --prefix=/deps .
 
 FROM base
 
@@ -19,6 +19,9 @@ LABEL com.abhinavsingh.name="abhinavsingh/proxy.py" \
       com.abhinavsingh.docker.cmd="docker run -it --rm -p 8899:8899 abhinavsingh/proxy.py"
 
 COPY --from=builder /deps /usr/local
+
+# Install openssl to enable TLS interception within container
+RUN apk update && apk add openssl
 
 EXPOSE 8899/tcp
 ENTRYPOINT [ "proxy" ]

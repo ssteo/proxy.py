@@ -10,6 +10,7 @@
 """
 import os
 import time
+import pathlib
 import ipaddress
 
 from typing import List
@@ -74,3 +75,19 @@ DEFAULT_THREADLESS = False
 DEFAULT_TIMEOUT = 10
 DEFAULT_VERSION = False
 DEFAULT_HTTP_PORT = 80
+DEFAULT_MAX_SEND_SIZE = 16 * 1024
+
+DEFAULT_DATA_DIRECTORY_PATH = os.path.join(str(pathlib.Path.home()), '.proxy')
+
+# Cor plugins enabled by default or via flags
+PLUGIN_HTTP_PROXY = 'proxy.http.proxy.HttpProxyPlugin'
+PLUGIN_WEB_SERVER = 'proxy.http.server.HttpWebServerPlugin'
+PLUGIN_PAC_FILE = 'proxy.http.server.HttpWebServerPacFilePlugin'
+PLUGIN_DEVTOOLS_PROTOCOL = 'proxy.http.inspector.DevtoolsProtocolPlugin'
+PLUGIN_DASHBOARD = 'proxy.dashboard.dashboard.ProxyDashboard'
+PLUGIN_INSPECT_TRAFFIC = 'proxy.dashboard.inspect_traffic.InspectTrafficPlugin'
+PLUGIN_PROXY_AUTH = 'proxy.http.proxy.AuthPlugin'
+
+PY2_DEPRECATION_MESSAGE = '''DEPRECATION: proxy.py no longer supports Python 2.7.  Kindly upgrade to Python 3+. '
+                'If for some reasons you cannot upgrade, use'
+                '"pip install proxy.py==0.3".'''

@@ -16,10 +16,10 @@ import ssl
 from unittest import mock
 from typing import Any, cast
 
+from proxy.proxy import Proxy
 from proxy.common.utils import bytes_
-from proxy.common.flags import Flags
 from proxy.common.utils import build_http_request, build_http_response
-from proxy.core.connection import TcpClientConnection
+from proxy.core.connection import TcpClientConnection, TcpServerConnection
 from proxy.http.codes import httpStatusCodes
 from proxy.http.methods import httpMethods
 from proxy.http.handler import HttpProtocolHandler
@@ -33,26 +33,36 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
     @mock.patch('ssl.wrap_socket')
     @mock.patch('ssl.create_default_context')
     @mock.patch('proxy.http.proxy.server.TcpServerConnection')
-    @mock.patch('subprocess.Popen')
+    @mock.patch('proxy.http.proxy.server.gen_public_key')
+    @mock.patch('proxy.http.proxy.server.gen_csr')
+    @mock.patch('proxy.http.proxy.server.sign_csr')
     @mock.patch('selectors.DefaultSelector')
     @mock.patch('socket.fromfd')
     def setUp(self,
               mock_fromfd: mock.Mock,
               mock_selector: mock.Mock,
-              mock_popen: mock.Mock,
+              mock_sign_csr: mock.Mock,
+              mock_gen_csr: mock.Mock,
+              mock_gen_public_key: mock.Mock,
               mock_server_conn: mock.Mock,
               mock_ssl_context: mock.Mock,
               mock_ssl_wrap: mock.Mock) -> None:
         self.mock_fromfd = mock_fromfd
         self.mock_selector = mock_selector
-        self.mock_popen = mock_popen
+        self.mock_sign_csr = mock_sign_csr
+        self.mock_gen_csr = mock_gen_csr
+        self.mock_gen_public_key = mock_gen_public_key
         self.mock_server_conn = mock_server_conn
         self.mock_ssl_context = mock_ssl_context
         self.mock_ssl_wrap = mock_ssl_wrap
 
+        self.mock_sign_csr.return_value = True
+        self.mock_gen_csr.return_value = True
+        self.mock_gen_public_key.return_value = True
+
         self.fileno = 10
         self._addr = ('127.0.0.1', 54382)
-        self.flags = Flags(
+        self.flags = Proxy.initialize(
             ca_cert_file='ca-cert.pem',
             ca_key_file='ca-key.pem',
             ca_signing_key_file='ca-signing-key.pem',)
@@ -87,6 +97,10 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
             if self.mock_ssl_context.return_value.wrap_socket.called:
                 return self.server_ssl_connection
             return self._conn
+
+        # Do not mock the original wrap method
+        self.server.wrap.side_effect = \
+            lambda x, y: TcpServerConnection.wrap(self.server, x, y)
 
         self.server.has_buffer.side_effect = has_buffer
         type(self.server).closed = mock.PropertyMock(side_effect=closed)
@@ -126,7 +140,10 @@ class TestHttpProxyPluginExamplesWithTlsInterception(unittest.TestCase):
         )
         self.protocol_handler.run_once()
 
-        self.mock_popen.assert_called()
+        self.assertEqual(self.mock_sign_csr.call_count, 1)
+        self.assertEqual(self.mock_gen_csr.call_count, 1)
+        self.assertEqual(self.mock_gen_public_key.call_count, 1)
+
         self.mock_server_conn.assert_called_once_with('uni.corn', 443)
         self.server.connect.assert_called()
         self.assertEqual(

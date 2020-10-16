@@ -57,18 +57,22 @@ Table of Contents
         * [Cache Responses Plugin](#cacheresponsesplugin)
         * [Man-In-The-Middle Plugin](#maninthemiddleplugin)
         * [Proxy Pool Plugin](#proxypoolplugin)
+        * [FilterByClientIpPlugin](#filterbyclientipplugin)
+        * [ModifyChunkResponsePlugin](#modifychunkresponseplugin)
     * [HTTP Web Server Plugins](#http-web-server-plugins)
         * [Reverse Proxy](#reverse-proxy)
         * [Web Server Route](#web-server-route)
     * [Plugin Ordering](#plugin-ordering)
 * [End-to-End Encryption](#end-to-end-encryption)
 * [TLS Interception](#tls-interception)
+    * [TLS Interception With Docker](#tls-interception-with-docker)
 * [Proxy Over SSH Tunnel](#proxy-over-ssh-tunnel)
     * [Proxy Remote Requests Locally](#proxy-remote-requests-locally)
     * [Proxy Local Requests Remotely](#proxy-local-requests-remotely)
 * [Embed proxy.py](#embed-proxypy)
     * [Blocking Mode](#blocking-mode)
     * [Non-blocking Mode](#non-blocking-mode)
+    * [Loading Plugins](#loading-plugins)
 * [Unit testing with proxy.py](#unit-testing-with-proxypy)
     * [proxy.TestCase](#proxytestcase)
     * [Override Startup Flags](#override-startup-flags)
@@ -668,6 +672,57 @@ Make a curl request via `8899` proxy:
 Verify that `8899` proxy forwards requests to upstream proxies
 by checking respective logs.
 
+### FilterByClientIpPlugin
+
+Reject traffic from specific IP addresses.  By default this
+plugin blocks traffic from `127.0.0.1` and `::1`.
+
+Start `proxy.py` as:
+
+```bash
+❯ proxy \
+    --plugins proxy.plugin.FilterByClientIpPlugin
+```
+
+Send a request using `curl -v -x localhost:8899 http://google.com`:
+
+```bash
+... [redacted] ...
+> Proxy-Connection: Keep-Alive
+>
+< HTTP/1.1 418 I'm a tea pot
+< Connection: close
+<
+* Closing connection 0
+```
+
+Modify plugin to your taste e.g. Allow specific IP addresses only.
+
+### ModifyChunkResponsePlugin
+
+This plugin demonstrate how to modify chunked encoded responses.  In able to do so, this plugin uses `proxy.py` core to parse the chunked encoded response.  Then we reconstruct the response using custom hardcoded chunks, ignoring original chunks received from upstream server.
+
+Start `proxy.py` as:
+
+```bash
+❯ proxy \
+    --plugins proxy.plugin.ModifyChunkResponsePlugin
+```
+
+Verify using `curl -v -x localhost:8899 http://httpbin.org/stream/5`:
+
+```bash
+... [redacted] ...
+modify
+chunk
+response
+plugin
+* Connection #0 to host localhost left intact
+* Closing connection 0
+```
+
+Modify `ModifyChunkResponsePlugin` to your taste. Example, instead of sending hardcoded chunks, parse and modify the original `JSON` chunks received from the upstream server.
+
 ## HTTP Web Server Plugins
 
 ### Reverse Proxy
@@ -773,6 +828,22 @@ Verify using `curl -x https://localhost:8899 --proxy-cacert https-cert.pem https
 }
 ```
 
+If you want to avoid passing `--proxy-cacert` flag, also consider signing generated SSL certificates.  Example:
+
+First, generate CA certificates:
+
+```bash
+make ca-certificates
+```
+
+Then, sign SSL certificate:
+
+```bash
+make sign-https-certificates
+```
+
+Now restart the server with `--cert-file https-signed-cert.pem` flag.  Note that you must also trust generated `ca-cert.pem` in your system keychain.
+
 TLS Interception
 =================
 
@@ -795,8 +866,7 @@ response from the server.  Start `proxy.py` as:
 ```
 
 
-> :note: **MacOS users** also need to pass explicit CA file path
-> needed for validation of peer certificates. See --ca-file flag.
+[![NOTE](https://img.shields.io/static/v1?label=MacOS&message=note&color=yellow)](https://github.com/abhinavsingh/proxy.py#flags) Also provide explicit CA bundle path needed for validation of peer certificates. See `--ca-file` flag.
 
 
 Verify TLS interception using `curl`
@@ -863,8 +933,93 @@ cached file instead of plain text.
 Now use CA flags with other
 [plugin examples](#plugin-examples) to see them work with `https` traffic.
 
+## TLS Interception With Docker
+
+Important notes about TLS Interception with Docker container:
+
+- Since `v2.2.0`, `proxy.py` docker container also ships with `openssl`.  This allows `proxy.py`
+to generate certificates on the fly for TLS Interception.
+
+- For security reasons, `proxy.py` docker container doesn't ship with CA certificates.
+
+Here is how to start a `proxy.py` docker container
+with TLS Interception:
+
+1. Generate CA certificates on host computer
+
+    ```bash
+    ❯ make ca-certificates
+    ```
+
+2. Copy all generated certificates into a separate directory.  We'll later mount this directory into our docker container
+
+    ```bash
+    ❯ mkdir /tmp/ca-certificates
+    ❯ cp ca-cert.pem ca-key.pem ca-signing-key.pem /tmp/ca-certificates
+    ```
+
+3. Start docker container
+
+    ```bash
+    ❯ docker run -it --rm \
+        -v /tmp/ca-certificates:/tmp/ca-certificates \
+        -p 8899:8899 \
+        abhinavsingh/proxy.py:latest \
+        --hostname 0.0.0.0 \
+        --plugins proxy.plugin.CacheResponsesPlugin \
+        --ca-key-file /tmp/ca-certificates/ca-key.pem \
+        --ca-cert-file /tmp/ca-certificates/ca-cert.pem \
+        --ca-signing-key /tmp/ca-certificates/ca-signing-key.pem
+    ```
+
+    - `-v /tmp/ca-certificates:/tmp/ca-certificates` flag mounts our CA certificate directory in container environment
+    - `--plugins proxy.plugin.CacheResponsesPlugin` enables `CacheResponsesPlugin` so that we can inspect intercepted traffic
+    - `--ca-*` flags enable TLS Interception.
+
+4. From another terminal, try TLS Interception using `curl`. You can omit `--cacert` flag if CA certificate is already trusted by the system.
+
+    ```bash
+    ❯ curl -v \
+        --cacert ca-cert.pem \
+        -x 127.0.0.1:8899 \
+        https://httpbin.org/get
+    ```
+
+5. Verify `issuer` field from response headers.
+
+    ```bash
+    * Server certificate:
+    *  subject: CN=httpbin.org; C=NA; ST=Unavailable; L=Unavailable; O=Unavailable; OU=Unavailable
+    *  start date: Jun 17 09:26:57 2020 GMT
+    *  expire date: Jun 17 09:26:57 2022 GMT
+    *  subjectAltName: host "httpbin.org" matched cert's "httpbin.org"
+    *  issuer: CN=example.com
+    *  SSL certificate verify ok.
+    ```
+
+6. Back on docker terminal, copy response dump path logs.
+
+    ```bash
+    ...[redacted]... [I] access_log:338 - 172.17.0.1:56498 - CONNECT httpbin.org:443 - 1031 bytes - 1216.70 ms
+    ...[redacted]... [I] close:49 - Cached response at /tmp/httpbin.org-ae1a927d064e4ab386ea319eb38fe251.txt
+    ```
+
+7. In another terminal, `cat` the response dump:
+
+    ```bash
+    ❯ docker exec -it $(docker ps | grep proxy.py | awk '{ print $1 }') cat /tmp/httpbin.org-ae1a927d064e4ab386ea319eb38fe251.txt
+    HTTP/1.1 200 OK
+    ...[redacted]...
+    {
+      ...[redacted]...,
+      "url": "http://httpbin.org/get"
+    }
+    ```
+
 Proxy Over SSH Tunnel
 =====================
+
+**This is a WIP and may not work as documented**
 
 Requires `paramiko` to work. See [requirements-tunnel.txt](https://github.com/abhinavsingh/proxy.py/blob/develop/requirements-tunnel.txt)
 
@@ -1017,6 +1172,36 @@ Note that:
    can be customized by either passing flags as list of
    input arguments e.g. `start(['--port', '8899'])` or
    by using passing flags as kwargs e.g. `start(port=8899)`.
+
+## Loading Plugins
+
+You can, of course, list plugins to load in the input arguments list of `proxy.main`, `proxy.start` or the `Proxy` constructor. Use the `--plugins` flag as when starting from command line:
+
+```python
+import proxy
+
+if __name__ == '__main__':
+  proxy.main([
+    '--plugins', 'proxy.plugin.CacheResponsesPlugin',
+  ])
+```
+
+However, for simplicity you can pass the list of plugins to load as a keyword argument to `proxy.main`, `proxy.start` or the `Proxy` constructor:
+
+```python
+import proxy
+from proxy.plugin import FilterByUpstreamHostPlugin
+
+if __name__ == '__main__':
+  proxy.main([], plugins=[
+    b'proxy.plugin.CacheResponsesPlugin',
+    FilterByUpstreamHostPlugin,
+  ])
+```
+
+Note that it supports:
+1. The fully-qualified name of a class as `bytes`
+2. Any `type` instance for a Proxy.py plugin class. This is espacially useful for custom plugins defined locally.
 
 Unit testing with proxy.py
 ==========================
@@ -1327,7 +1512,7 @@ usage: pki.py [-h] [--password PASSWORD] [--private-key-path PRIVATE_KEY_PATH]
               [--public-key-path PUBLIC_KEY_PATH] [--subject SUBJECT]
               action
 
-proxy.py v2.1.2 : PKI Utility
+proxy.py v2.2.0 : PKI Utility
 
 positional arguments:
   action                Valid actions: remove_passphrase, gen_private_key,
@@ -1518,7 +1703,7 @@ usage: proxy [-h] [--backlog BACKLOG] [--basic-auth BASIC_AUTH]
              [--static-server-dir STATIC_SERVER_DIR] [--threadless]
              [--timeout TIMEOUT] [--version]
 
-proxy.py v2.1.2
+proxy.py v2.2.0
 
 optional arguments:
   -h, --help            show this help message and exit

@@ -132,14 +132,15 @@ class TestHttpParser(unittest.TestCase):
                      b'example.com')
         self.parser.parse(pkt)
         self.assertEqual(self.parser.total_size, len(pkt))
-        self.assertEqual(self.parser.build_url(), b'/path/dir/?a=b&c=d#p=q')
+        self.assertEqual(self.parser.build_path(), b'/path/dir/?a=b&c=d#p=q')
         self.assertEqual(self.parser.method, b'GET')
         assert self.parser.url
         self.assertEqual(self.parser.url.hostname, b'example.com')
         self.assertEqual(self.parser.url.port, None)
         self.assertEqual(self.parser.version, b'HTTP/1.1')
         self.assertEqual(self.parser.state, httpParserStates.COMPLETE)
-        self.assertEqual(self.parser.headers[b'host'], (b'Host', b'example.com'))
+        self.assertEqual(
+            self.parser.headers[b'host'], (b'Host', b'example.com'))
         self.parser.del_headers([b'host'])
         self.parser.add_headers([(b'Host', b'example.com')])
         self.assertEqual(
@@ -149,7 +150,7 @@ class TestHttpParser(unittest.TestCase):
             self.parser.build())
 
     def test_build_url_none(self) -> None:
-        self.assertEqual(self.parser.build_url(), b'/None')
+        self.assertEqual(self.parser.build_path(), b'/None')
 
     def test_line_rcvd_to_rcving_headers_state_change(self) -> None:
         pkt = b'GET http://localhost HTTP/1.1'
@@ -193,7 +194,10 @@ class TestHttpParser(unittest.TestCase):
         self.parser.parse(CRLF * 2)
         self.assertEqual(self.parser.total_size, len(pkt) +
                          (3 * len(CRLF)) + len(host_hdr))
-        self.assertEqual(self.parser.headers[b'host'], (b'Host', b'localhost:8080'))
+        self.assertEqual(
+            self.parser.headers[b'host'],
+            (b'Host',
+             b'localhost:8080'))
         self.assertEqual(self.parser.state, httpParserStates.COMPLETE)
 
     def test_get_partial_parse2(self) -> None:
@@ -210,7 +214,10 @@ class TestHttpParser(unittest.TestCase):
         self.assertEqual(self.parser.state, httpParserStates.LINE_RCVD)
 
         self.parser.parse(b'localhost:8080' + CRLF)
-        self.assertEqual(self.parser.headers[b'host'], (b'Host', b'localhost:8080'))
+        self.assertEqual(
+            self.parser.headers[b'host'],
+            (b'Host',
+             b'localhost:8080'))
         self.assertEqual(self.parser.buffer, b'')
         self.assertEqual(
             self.parser.state,
@@ -301,7 +308,7 @@ class TestHttpParser(unittest.TestCase):
         See https://github.com/abhinavsingh/py/issues/5 for details.
         """
         self.parser.parse(b'CONNECT pypi.org:443 HTTP/1.0\r\n\r\n')
-        self.assertEqual(self.parser.method, b'CONNECT')
+        self.assertEqual(self.parser.method, httpMethods.CONNECT)
         self.assertEqual(self.parser.version, b'HTTP/1.0')
         self.assertEqual(self.parser.state, httpParserStates.COMPLETE)
 
